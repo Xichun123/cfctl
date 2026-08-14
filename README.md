@@ -40,8 +40,22 @@ Never commit the token or pass it as a command argument.
 cfctl doctor
 cfctl zones list
 cfctl zones list --json
+cfctl dns list example.com
+cfctl dns list example.com --type A --name www
 cfctl tools
 ```
+
+DNS writes are dry runs unless `--yes` is supplied:
+
+```bash
+cfctl dns create example.com A www 192.0.2.1 --proxied
+cfctl dns create example.com A www 192.0.2.1 --proxied --yes
+cfctl dns update example.com <record-id> --content 192.0.2.2 --yes
+cfctl dns delete example.com <record-id>
+cfctl dns delete example.com <record-id> --yes
+```
+
+High-level DNS writes support `A`, `AAAA`, `CNAME`, `TXT`, `MX`, and `NS`. Use `--ttl`, `--priority`, `--comment`, `--proxied`, `--dns-only`, and `--json` as needed.
 
 For APIs without a high-level command, use the MCP escape hatch:
 

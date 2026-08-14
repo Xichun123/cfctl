@@ -44,7 +44,19 @@ export CLOUDFLARE_MCP_AUTHORIZATION='Bearer your-token'
    ```bash
    cfctl zones list
    cfctl zones list --json
+   cfctl dns list example.com
+   cfctl dns list example.com --type A --name www
    ```
+
+   DNS writes default to a dry run and require `--yes` to apply:
+
+   ```bash
+   cfctl dns create example.com A www 192.0.2.1 --proxied
+   cfctl dns update example.com <record-id> --content 192.0.2.2 --yes
+   cfctl dns delete example.com <record-id> --yes
+   ```
+
+   High-level writes support `A`, `AAAA`, `CNAME`, `TXT`, `MX`, and `NS`. Use raw MCP for advanced record types.
 
 4. For tasks not covered by a high-level command, call MCP `search` first. Do not guess endpoint paths or payload fields. Call `execute` only after discovery.
 
