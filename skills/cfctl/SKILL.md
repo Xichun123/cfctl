@@ -30,7 +30,7 @@ Authentication comes from `CLOUDFLARE_MCP_TOKEN` or `CLOUDFLARE_MCP_AUTHORIZATIO
 
 ## Work from explicit targets
 
-1. Use `zones.list` with a name/account filter to obtain a zone ID. Keep account and zone identity visible in your reasoning; never select an ambiguous match.
+1. Use `zones.list` with a name/account filter to obtain a zone ID. It returns compact zone summaries rather than permissions and plan metadata. Keep account and zone identity visible in your reasoning; never select an ambiguous match.
 2. Use `dns.list` or `dns.get` for record IDs and current `modified_on`. Names are full ASCII/punycode DNS names; no `@`, relative-name expansion, or implicit zone selection.
 3. Lists return one page. Follow `pagination.next.operation` and `pagination.next.input` until `next` is null before claiming to have enumerated all matches. A null next on page 2 does not imply page 1 was read. Contents are not clipped.
 4. DNS reads accept all record types. High-level creates/updates support A, AAAA, CNAME, TXT, MX and NS; advanced writes and type changes use raw MCP.

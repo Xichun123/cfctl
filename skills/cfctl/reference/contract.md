@@ -1,6 +1,6 @@
 # Agent result contract (schema_version 1)
 
-Every CLI invocation emits one JSON object and a newline on stdout. There is no normal diagnostic output on stderr. JSON values are not shortened for display. Explicit response/input limits return errors. The CLI is a single-operation process, not an interactive shell or an NDJSON daemon.
+Every CLI invocation emits one JSON object and a newline on stdout. There is no normal diagnostic output on stderr. Resource values needed for subsequent operations are not shortened. Zone lists use compact summaries, and upstream error diagnostics are bounded to avoid copying large responses into agent context. Explicit response/input limits return errors. The CLI is a single-operation process, not an interactive shell or an NDJSON daemon.
 
 All envelopes have these fields:
 
@@ -35,7 +35,8 @@ Supported high-level operations:
 | `doctor` | Negotiated protocol, server identity and capabilities |
 | `mcp.tools` | `tools`: all live tool definitions |
 | `mcp.call` | `structuredContent` if present; otherwise a sole JSON text block decoded; otherwise the original MCP result |
-| `zones.list`, `dns.list` | `items`: one page of complete API resources, `messages` |
+| `zones.list` | `items`: one page of compact summaries containing zone identity, state, timestamps, and account identity; `messages` |
+| `dns.list` | `items`: one page of complete DNS record resources, `messages` |
 | `dns.get` | `record`, `messages` |
 | `dns.create`, `dns.update`, `dns.delete` | `target`, `before`, exact API `request`; after submission, `write_result`, `messages`, and verified `record` when available |
 
@@ -86,6 +87,8 @@ A plan is not a durable transaction and is not bound to a later apply. Apply re-
 ## Errors and exit codes
 
 Errors have `code`, `message`, `retryable`, `next_action`, and `details`. Machine consumers should branch on `code`, `mutation`, and exit status, not parse English messages.
+
+Upstream error details are diagnostic summaries. API failures retain top-level response keys, status, errors, messages, pagination metadata, and the result shape/count, but omit the result payload itself. Long strings, arrays, and unusually wide or deeply nested MCP diagnostics are bounded with explicit truncation markers.
 
 | Exit | Meaning |
 | --- | --- |

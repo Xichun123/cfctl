@@ -153,6 +153,49 @@ test("list results preserve IDs, long content and executable next-page input", a
   assert.equal(f.requests[0].query.type, "CAA");
 });
 
+test("zone lists omit bulky metadata while preserving operational identity", async (t) => {
+  const zone = {
+    id: ZONE,
+    name: "example.com",
+    status: "active",
+    paused: false,
+    type: "full",
+    development_mode: 0,
+    created_on: "2026-01-01T00:00:00Z",
+    modified_on: "2026-01-02T00:00:00Z",
+    account: { id: "c".repeat(32), name: "Example", extra: "omit" },
+    permissions: Array.from({ length: 100 }, (_, index) => `permission-${index}`),
+    plan: { name: "Enterprise", metadata: "x".repeat(10000) },
+  };
+  const f = await fixture(t, { api: (request) => apiOk([zone], { result_info: { page: request.query.page, per_page: request.query.per_page, total_pages: 1, total_count: 1 } }) });
+  const output = await f.invoke("zones.list");
+  assert.equal(output.exitCode, 0);
+  assert.deepEqual(output.result.data.items[0], {
+    id: ZONE,
+    name: "example.com",
+    status: "active",
+    paused: false,
+    type: "full",
+    development_mode: 0,
+    created_on: "2026-01-01T00:00:00Z",
+    modified_on: "2026-01-02T00:00:00Z",
+    account: { id: "c".repeat(32), name: "Example" },
+  });
+  assert.ok(JSON.stringify(output.result).length < 2000);
+});
+
+test("API failures summarize large result payloads instead of copying them", async (t) => {
+  const largeResult = Array.from({ length: 100 }, (_, index) => ({ id: String(index), permissions: ["x".repeat(10000)] }));
+  const f = await fixture(t, { api: () => ({ success: false, status: 502, errors: [{ code: 1000, message: "upstream failed" }], messages: [], result: largeResult, result_info: { page: 1, per_page: 100 } }) });
+  const output = await f.invoke("zones.list", { per_page: 100 });
+  assert.equal(output.exitCode, 3);
+  assert.equal(output.result.error.code, "API_ERROR");
+  assert.ok(output.result.error.details.response_keys.includes("result"));
+  assert.equal(output.result.error.details.result_count, 100);
+  assert.equal(Object.hasOwn(output.result.error.details, "result"), false);
+  assert.ok(JSON.stringify(output.result).length < 2000);
+});
+
 test("missing pagination metadata is an error, not an apparently complete list", async (t) => {
   const f = await fixture(t, { api: () => apiOk([]) });
   const output = await f.invoke("zones.list");

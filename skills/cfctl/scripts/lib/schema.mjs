@@ -29,7 +29,7 @@ export const operations = {
     inputSchema: object({ name: string("Exact tool name from mcp.tools."), arguments: { type: "object", additionalProperties: true }, effect: { type: "string", enum: ["read", "write"] } }, ["name", "arguments", "effect"]),
   },
   "zones.list": {
-    description: "Read one page of zones; IDs and account IDs are preserved. Follow pagination.next until null.", effect: "read",
+    description: "Read one page of compact zone summaries; IDs and account IDs are preserved. Follow pagination.next until null.", effect: "read",
     inputSchema: object({ name: string("Exact zone name filter."), account_id: id, page, per_page: perPage }),
   },
   "dns.list": {

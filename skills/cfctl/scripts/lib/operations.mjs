@@ -5,9 +5,19 @@ import { validateRecord } from "./schema.mjs";
 const base = (zoneId) => `/zones/${zoneId}/dns_records`;
 const recordPath = (input) => `${base(input.zone_id)}/${input.record_id}`;
 
+function zoneSummary(zone) {
+  if (!zone || typeof zone !== "object") return zone;
+  const fields = ["id", "name", "status", "paused", "type", "development_mode", "created_on", "modified_on"];
+  const summary = Object.fromEntries(fields.filter((field) => zone[field] !== undefined).map((field) => [field, zone[field]]));
+  if (zone.account && typeof zone.account === "object") {
+    summary.account = Object.fromEntries(["id", "name"].filter((field) => zone.account[field] !== undefined).map((field) => [field, zone.account[field]]));
+  }
+  return summary;
+}
+
 function pageResult(operation, input, response, result) {
   if (!Array.isArray(response.result)) throw new AgentError("PROTOCOL_ERROR", "List result is not an array.");
-  result.data = { items: response.result, messages: response.messages || [] };
+  result.data = { items: operation === "zones.list" ? response.result.map(zoneSummary) : response.result, messages: response.messages || [] };
   const info = response.result_info;
   const perPage = info?.per_page;
   const total = info?.total_count;

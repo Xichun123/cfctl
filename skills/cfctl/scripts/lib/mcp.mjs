@@ -4,6 +4,55 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const PROTOCOL = "2025-03-26";
 const SUPPORTED_PROTOCOLS = new Set([PROTOCOL, "2025-06-18", "2025-11-25"]);
 const own = (value, key) => value && Object.hasOwn(value, key);
+const MAX_DIAGNOSTIC_CHARS = 8000;
+const MAX_DIAGNOSTIC_STRING = 2000;
+const MAX_DIAGNOSTIC_ITEMS = 10;
+const MAX_DIAGNOSTIC_KEYS = 20;
+
+function diagnostic(value, depth = 0, budget = { remaining: MAX_DIAGNOSTIC_CHARS }) {
+  if (budget.remaining <= 0) return "[diagnostic budget exhausted]";
+  if (typeof value === "string") {
+    const length = Math.min(value.length, MAX_DIAGNOSTIC_STRING, budget.remaining);
+    budget.remaining -= length;
+    return length < value.length ? `${value.slice(0, length)}...[truncated ${value.length - length} chars]` : value;
+  }
+  if (value === null || typeof value !== "object") {
+    budget.remaining -= String(value).length;
+    return value;
+  }
+  if (depth >= 4) return Array.isArray(value) ? `[array:${value.length}]` : "[object]";
+  if (Array.isArray(value)) {
+    const items = [];
+    for (const entry of value.slice(0, MAX_DIAGNOSTIC_ITEMS)) {
+      if (budget.remaining <= 0) break;
+      items.push(diagnostic(entry, depth + 1, budget));
+    }
+    if (value.length > items.length) items.push(`[${value.length - items.length} more items]`);
+    return items;
+  }
+  const entries = Object.entries(value);
+  const result = {};
+  let included = 0;
+  for (const [key, entry] of entries.slice(0, MAX_DIAGNOSTIC_KEYS)) {
+    if (budget.remaining <= 0) break;
+    budget.remaining -= key.length;
+    result[key] = diagnostic(entry, depth + 1, budget);
+    included++;
+  }
+  if (entries.length > included) result._truncated_keys = entries.length - included;
+  return result;
+}
+
+function apiErrorDetails(response) {
+  if (!response || typeof response !== "object") return { response: diagnostic(response) };
+  const details = { response_keys: Object.keys(response).slice(0, MAX_DIAGNOSTIC_KEYS) };
+  for (const field of ["success", "status", "errors", "messages", "result_info"]) {
+    if (response[field] !== undefined) details[field] = diagnostic(response[field]);
+  }
+  if (Array.isArray(response.result)) details.result_count = response.result.length;
+  else if (response.result !== undefined && response.result !== null) details.result_type = typeof response.result;
+  return details;
+}
 
 export function configuration(env = process.env) {
   const invalid = (message) => { throw new AgentError("INVALID_CONFIG", message, { exitCode: 2 }); };
@@ -105,9 +154,9 @@ export class McpClient {
         return null;
       }
       const message = await readResponse(response, payload.id);
-      if (!response.ok) throw new AgentError("HTTP_ERROR", `MCP HTTP request failed (${response.status}).`, { retryable: response.status === 429 || response.status >= 500, details: { status: response.status, body: message, retry_after: response.headers.get("retry-after") } });
+      if (!response.ok) throw new AgentError("HTTP_ERROR", `MCP HTTP request failed (${response.status}).`, { retryable: response.status === 429 || response.status >= 500, details: { status: response.status, body: diagnostic(message), retry_after: response.headers.get("retry-after") } });
       if (message?.jsonrpc !== "2.0" || message.id !== payload.id || (!own(message, "result") && !own(message, "error"))) throw new AgentError("PROTOCOL_ERROR", "MCP response does not match the JSON-RPC request.");
-      if (own(message, "error")) throw new AgentError("MCP_ERROR", "MCP rejected the request.", { details: message.error });
+      if (own(message, "error")) throw new AgentError("MCP_ERROR", "MCP rejected the request.", { details: diagnostic(message.error) });
       return message.result;
     } catch (error) {
       if (error instanceof AgentError) throw error;
@@ -147,7 +196,7 @@ export class McpClient {
   async callTool(name, args) {
     const result = await this.request("tools/call", { name, arguments: args });
     if (!result || typeof result !== "object") throw new AgentError("PROTOCOL_ERROR", "Invalid tools/call result.");
-    if (result.isError) throw new AgentError("TOOL_ERROR", `MCP tool ${name} reported failure.`, { details: result });
+    if (result.isError) throw new AgentError("TOOL_ERROR", `MCP tool ${name} reported failure.`, { details: diagnostic(result) });
     return result;
   }
 }
@@ -162,7 +211,7 @@ export function toolData(result) {
 
 export function assertApi(response) {
   if (response?.success === true && Number.isInteger(response.status) && response.status >= 200 && response.status < 300 && (!Array.isArray(response.errors) || response.errors.length === 0)) return response;
-  throw new AgentError("API_ERROR", "Cloudflare API request failed or returned an invalid result.", { retryable: response?.status === 429 || response?.status >= 500, details: response });
+  throw new AgentError("API_ERROR", "Cloudflare API request failed or returned an invalid result.", { retryable: response?.status === 429 || response?.status >= 500, details: apiErrorDetails(response) });
 }
 
 export function api(client, request) {
