@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+command -v node >/dev/null 2>&1 || { echo "Error: Node.js 22+ is required" >&2; exit 1; }
+node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' || {
+  echo "Error: Node.js 22+ is required" >&2
+  exit 1
+}
+
 REPO=${CFCTL_REPO:-Xichun123/cfctl}
 REF=${CFCTL_REF:-main}
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd || true)

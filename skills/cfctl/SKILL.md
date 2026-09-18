@@ -1,86 +1,86 @@
 ---
 name: cfctl
-description: Operate Cloudflare through the cfctl CLI and Cloudflare's remote MCP server. Use for zones, DNS, Workers, Pages, R2, D1, KV, Zero Trust, WAF, CDN, account settings, or Cloudflare API discovery and execution.
+description: Agent-only Cloudflare operations through a JSON CLI and Cloudflare's remote MCP. Use for zones, DNS, Workers, Pages, R2, D1, KV, Zero Trust, WAF, CDN, account settings, and Cloudflare API discovery or execution.
 ---
 
 # cfctl
 
-Use the bundled dependency-free CLI to access `https://mcp.cloudflare.com/mcp`.
+Agent interface, version 2. Node.js 22+. Every invocation returns exactly one compact JSON envelope on stdout. No tables, prompts, implicit retries, or legacy command syntax.
 
-## Requirements
+## Invoke and discover
 
-- Node.js 18 or newer.
-- A least-privilege Cloudflare API token in `CLOUDFLARE_MCP_TOKEN`.
-- Never place a token in source files, command arguments, logs, or committed `.env` files.
+Resolve `scripts/cfctl.mjs` relative to this SKILL.md. Invoke it with Node using its absolute path; this works with a skill-only installation. If the installer provided `cfctl` on PATH, it is equivalent.
 
 ```bash
-export CLOUDFLARE_MCP_TOKEN='your-cloudflare-api-token'
+node /absolute/path/to/cfctl/scripts/cfctl.mjs schema
+node /absolute/path/to/cfctl/scripts/cfctl.mjs schema dns.update
 ```
 
-Optional configuration:
+Below, `cfctl` denotes that same entry point. `schema [operation]` works offline, without credentials. It is authoritative for operation names, required fields, input schemas, output contract, and exit codes. Read the relevant schema before using an unfamiliar operation.
 
 ```bash
-export CLOUDFLARE_MCP_URL='https://mcp.cloudflare.com/mcp'
-# Or provide the complete Authorization value:
-export CLOUDFLARE_MCP_AUTHORIZATION='Bearer your-token'
+cfctl <operation> --input '<JSON object>'
+cfctl <operation> --file /absolute/path/request.json
+cfctl <operation> --stdin < /absolute/path/request.json
 ```
 
-## Workflow
+Use exactly one input source. Omitted input means `{}`. Prefer a JSON file for code, multiline strings, or values requiring shell quoting. Unknown fields and invalid input are rejected. Never put credentials in operation input or command arguments.
 
-1. Check connectivity and authentication:
+Authentication comes from `CLOUDFLARE_MCP_TOKEN` or `CLOUDFLARE_MCP_AUTHORIZATION`. Do not print their values. Use `doctor` to diagnose connectivity/authentication when needed; it is not required before every operation. See [configuration](reference/configuration.md).
 
-   ```bash
-   cfctl doctor
-   ```
+## Work from explicit targets
 
-2. Retrieve live MCP tool definitions before the first raw operation in a session:
-
-   ```bash
-   cfctl tools
-   ```
-
-3. Prefer a high-level command when available:
-
-   ```bash
-   cfctl zones list
-   cfctl zones list --json
-   cfctl dns list example.com
-   cfctl dns list example.com --type A --name www
-   ```
-
-   DNS writes default to a dry run and require `--yes` to apply:
-
-   ```bash
-   cfctl dns create example.com A www 192.0.2.1 --proxied
-   cfctl dns update example.com <record-id> --content 192.0.2.2 --yes
-   cfctl dns delete example.com <record-id> --yes
-   ```
-
-   High-level writes support `A`, `AAAA`, `CNAME`, `TXT`, `MX`, and `NS`. Use raw MCP for advanced record types.
-
-4. For tasks not covered by a high-level command, call MCP `search` first. Do not guess endpoint paths or payload fields. Call `execute` only after discovery.
-
-5. For mutations, summarize the exact target and effect before execution. Obtain explicit confirmation before destructive, security-sensitive, billing-related, or broad-impact changes unless the user already authorized that exact action.
-
-6. Validate `success`, HTTP status, `errors`, and `messages`; after a mutation, read the resource again to verify the result.
-
-## Raw MCP calls
+1. Use `zones.list` with a name/account filter to obtain a zone ID. Keep account and zone identity visible in your reasoning; never select an ambiguous match.
+2. Use `dns.list` or `dns.get` for record IDs and current `modified_on`. Names are full ASCII/punycode DNS names; no `@`, relative-name expansion, or implicit zone selection.
+3. Lists return one page. Follow `pagination.next.operation` and `pagination.next.input` until `next` is null before claiming to have enumerated all matches. A null next on page 2 does not imply page 1 was read. Contents are not clipped.
+4. DNS reads accept all record types. High-level creates/updates support A, AAAA, CNAME, TXT, MX and NS; advanced writes and type changes use raw MCP.
 
 ```bash
-cfctl call search --args '{"code":"async () => { /* inspect spec */ }"}'
-cfctl call execute --args-file /tmp/cloudflare-execute.json
-printf '%s' '{"code":"async () => { /* execute */ }"}' | cfctl call execute --stdin
+cfctl zones.list --input '{"name":"example.com"}'
+cfctl dns.list --input '{"zone_id":"<32-hex-zone-id>","type":"A","name":"www.example.com"}'
+cfctl dns.get --input '{"zone_id":"<32-hex-zone-id>","record_id":"<32-hex-record-id>"}'
 ```
 
-The live `tools` output is authoritative if its schema differs from these examples.
+## Mutations and authorization
 
-## Safety
+DNS mutations require an explicit `mode`: `plan` performs reads and returns the exact request; `apply` submits it. There is no `--yes` and no interactive confirmation. A plan is optional, not an approval gate. It is useful when the user requests a preview or the target/effect needs review.
 
-- Use the narrowest account, zone, resource, and token permissions possible.
-- Never print environment variables or authorization headers while debugging.
-- Treat DNS deletion, zone changes, deployments, routes, WAF, Access policies, token changes, and bulk operations as high impact.
-- Preserve existing settings unless the requested task requires changing them.
-- Retrieve all pages before drawing conclusions.
-- State the rollback path before changes that can affect production traffic.
+Act within the user's existing authorization; do not ask again for an already authorized action. If an essential target, intended effect, or authorization is missing, identify exactly what is needed. `mode: apply` is an execution instruction, not proof of user authorization.
 
-See `reference/configuration.md` for credential and protocol details.
+For update/delete, pass the exact `if_modified_on` from a current read. A mismatch returns `PRECONDITION_FAILED` with the current record and performs no write. Review that record before submitting a new precondition. This check is not atomic and cannot eliminate concurrent-write races.
+
+```bash
+cfctl dns.update --input '{"zone_id":"<32-hex-zone-id>","record_id":"<32-hex-record-id>","if_modified_on":"<exact-modified_on>","mode":"apply","patch":{"content":"192.0.2.2"}}'
+```
+
+Create requires explicit type, full name, content, TTL, and proxy state. MX also requires priority. Update uses PATCH and preserves unspecified settings; enabling proxying normalizes TTL to 1, which is shown in the request. Before a change that affects traffic, retain the prior state and identify how to restore it. Responses include `before` for update/delete; this is evidence for recovery, not an automatic rollback or an executable create payload.
+
+## Read outcomes before deciding what to do next
+
+Always inspect `ok`, `error`, and `mutation`; do not rely on exit status alone.
+
+- `state: none`: no mutation was submitted, or a high-level API write was explicitly rejected.
+- `state: planned`: only reads occurred; inspect `data.request`.
+- `state: applied, verification: passed`: the DNS write succeeded and the readback matched requested fields (or delete returned 404).
+- `state: applied, verification: failed/unknown`: the write succeeded, but readback differed or could not be obtained. Do not replay it. Reconcile by reading the target.
+- `state: unknown`: a write may have occurred. Do not replay it. Use the target ID, or for a create the zone/name/type/content, to inspect actual state.
+
+Errors provide `code`, `message`, `retryable`, `next_action`, and `details`. `retryable` permits consideration of a read retry; it never triggers an automatic retry. Exit 5 requires reconciliation, not blind replay. See [the result contract](reference/contract.md) for exact semantics and limitations.
+
+## Raw MCP for other Cloudflare capabilities
+
+1. Call `mcp.tools` once before the first raw operation in the task. Its live tool schemas are authoritative.
+2. Call the discovered `search` tool to inspect the API. Do not guess endpoints or payload fields.
+3. Call `execute` with code based on that discovery. Declare `effect: read` or `effect: write` honestly. This declaration is not a sandbox and cannot prevent writes.
+4. Have code return structured results including API `success`, `status`, `errors`, `messages`, and relevant resource IDs. Inspect every nested result in batch/multi-step operations.
+5. For a raw mutation, make a separate read to verify the intended resource state. Raw write results always have `state: unknown, verification: not_performed`, even with `ok: true`: tool completion alone does not prove what arbitrary code changed.
+
+```bash
+cfctl mcp.tools
+cfctl mcp.call --file /absolute/path/search-request.json
+cfctl mcp.call --file /absolute/path/execute-request.json
+```
+
+A raw request is `{"name":"<discovered-tool>","arguments":{...},"effect":"read|write"}`. Only the outer recognized API envelope is checked automatically; arbitrary nested results and rollback remain the agent's responsibility.
+
+Use narrow token permissions and resource scope. Never log credentials. Managed DNS inventory comes from the Cloudflare API; public DNS resolution/propagation checks must use Cloudflare DoH at `https://cloudflare-dns.com/dns-query`.

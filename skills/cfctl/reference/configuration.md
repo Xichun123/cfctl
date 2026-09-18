@@ -1,86 +1,45 @@
-# Configuration and migration
+# Configuration
 
-## Source MCP configuration
+Requires Node.js 22 or newer. The CLI uses built-in Node APIs and has no package dependencies.
 
-A typical MCP client configuration is:
+## Authentication
 
-```json
-{
-  "cloudflare": {
-    "url": "https://mcp.cloudflare.com/mcp",
-    "headers": {
-      "Authorization": "Bearer <token>"
-    }
-  }
-}
-```
+Provide a least-privilege Cloudflare API token through `CLOUDFLARE_MCP_TOKEN`. Alternatively, set `CLOUDFLARE_MCP_AUTHORIZATION` to a complete Authorization header value. Setting both is an error.
 
-The skill keeps the endpoint but intentionally does not copy the credential into any skill file. Convert it to environment variables:
+Do not put credentials in skill files, command arguments, request JSON, committed environment files, or diagnostic output. The CLI does not load `.env` files automatically. Supply credentials through the execution environment or a secret manager.
 
-```bash
-export CLOUDFLARE_MCP_URL='https://mcp.cloudflare.com/mcp'
-export CLOUDFLARE_MCP_TOKEN='<token>'
-```
+The CLI redacts configured authentication and additional-header values from its output, including upstream errors. This is defense in depth: arbitrary resource data can contain other secrets that the CLI cannot identify. Limit queries to the data needed for the task.
 
-`CLOUDFLARE_MCP_TOKEN` is the value after `Bearer `. If an authentication system needs a different complete value, use:
+The endpoint defaults to `https://mcp.cloudflare.com/mcp`. Override it with `CLOUDFLARE_MCP_URL` for a trusted gateway. HTTPS is required except for localhost/loopback HTTP tests. URLs with embedded credentials, query parameters or fragments are rejected. Redirects are not followed.
 
-```bash
-export CLOUDFLARE_MCP_AUTHORIZATION='Bearer <token>'
-```
-
-Do not set both variables. If both are present, `CLOUDFLARE_MCP_AUTHORIZATION` takes precedence.
+The client is noninteractive and uses bearer authentication. It does not implement browser OAuth. If policy requires OAuth, use an OAuth-capable MCP client.
 
 ## Additional headers
 
-For gateways or Cloudflare Access service tokens, provide non-Authorization headers as a JSON object:
+`CLOUDFLARE_MCP_HEADERS_JSON` may contain a JSON object of string-valued headers for a trusted gateway or Cloudflare Access. Authorization, host, transport framing and MCP protocol headers cannot be overridden here. Use the authentication variables for Authorization.
 
-```bash
-export CLOUDFLARE_MCP_HEADERS_JSON='{
-  "CF-Access-Client-Id": "example.access",
-  "CF-Access-Client-Secret": "secret"
-}'
-```
+All additional-header values are treated as sensitive for output redaction. Do not print the variable to diagnose header problems.
 
-Keep this value out of committed shell profiles and repository files when it contains secrets.
+## Deadlines and response bounds
 
-## Token permissions
+`CLOUDFLARE_MCP_TIMEOUT_MS` sets the deadline per HTTP request, including reading the response body. Default: 30000 milliseconds; supported range: 1–300000. An invocation can make several HTTP requests, so its total duration can exceed this deadline.
 
-Create a separate least-privilege token for agent automation. Grant only the account/zone and permissions needed for the task. Avoid a global API key.
+There are no automatic retries, including initialization, reads, and writes. HTTP 429 errors include `retry_after` when the server provides it. The agent decides whether a later retry is appropriate.
 
-Common operations may require distinct permissions, for example:
+Each HTTP response and operation input is limited to 8 MiB. Oversized responses fail explicitly rather than being truncated. Reduce page size, narrow filters, or return a smaller structured result from raw code.
 
-- DNS record reads/writes
-- Workers Scripts reads/writes
-- Workers Routes reads/writes
-- Pages reads/writes
-- R2 or D1 reads/writes
-- Account Settings reads/writes
-- Zero Trust or Access reads/writes
+## MCP behavior
 
-The API response will normally identify missing permission failures with HTTP `403` or an error code/message.
+Each invocation initializes a fresh MCP session, sends `notifications/initialized`, then performs its operation in that session. Session IDs and authentication are not persisted locally. Server-side session expiry is managed by the server.
 
-## MCP protocol behavior
+The client requests protocol version `2025-03-26` and also accepts `2025-06-18` and `2025-11-25`. It uses Streamable HTTP POST with JSON-RPC 2.0, accepts JSON or SSE responses, and correlates response IDs. For SSE it consumes complete events until the matching result/error arrives, then cancels the response stream; it does not wait for the server to close a persistent connection.
 
-The bundled client:
+`mcp.tools` consumes all tool-definition pages and rejects repeated cursors. Resource lists deliberately return one page with executable next-page input. The client does not implement general server-initiated MCP requests, resumable streams, or OAuth.
 
-1. Opens a Streamable HTTP session.
-2. Sends MCP `initialize`.
-3. Sends `notifications/initialized`.
-4. Lists or calls tools in the same process/session.
-5. Accepts JSON and Server-Sent Events responses.
-6. Handles paginated `tools/list` results.
+## Permissions and diagnostics
 
-Each CLI invocation creates a new MCP session. It does not persist access tokens, cookies, or session IDs.
+Use a separate token scoped to the accounts/zones and permissions required by the task. Avoid a global API key. DNS reads/writes, Workers scripts/routes, Pages, R2, D1, account settings, and Zero Trust may require different permissions. A successful `doctor` proves MCP initialization worked; it does not prove every API permission is available.
 
-## OAuth limitation
+Inspect structured error codes and API errors for a denied operation. Do not repeatedly broaden token permissions or retry a rejected write. If credentials are missing, ask for the exact environment variable to be supplied through a secure mechanism; do not ask the user to paste the token into chat.
 
-Cloudflare's MCP endpoint can use browser OAuth in interactive MCP clients. The bundled command-line client is intentionally noninteractive and uses a bearer token. Use an OAuth-capable MCP client if organizational policy disallows static API tokens.
-
-## Credential rotation
-
-If a real token was accidentally committed, pasted into a public issue, or otherwise disclosed:
-
-1. Revoke or rotate it in the Cloudflare dashboard.
-2. Replace the local environment variable.
-3. Remove it from repository history and logs where possible.
-4. Re-run `cfctl doctor`.
+If a credential is disclosed, revoke/rotate it, replace the execution environment value, and remove exposed copies from logs/history where possible.
